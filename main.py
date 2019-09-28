@@ -7,6 +7,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import struct
 import time
+import threading
+from collections import deque
+import datetime
+import signal
+import sys
 
 COM_PORT = 'COM3'
 BAUD_RATES = 57600
@@ -20,115 +25,161 @@ def reversePacket(dataPacket,n):
 
 # fast plotting https://gist.github.com/electronut/d5e5f68c610821e311b0
 
+class HealthyPiCollector(threading.Thread):
+	"""
+		The HealthyPi class will spawn a sparate thread to avoid main thread blocking during data collection
+	"""
+	def __init__(self,data,port,lock,event,baud_rate=57600):
+
+		super(HealthyPiCollector, self).__init__()
+		self.data=data
+		self.port=port
+		self.lock=lock
+		self.event=event
+		self.baud_rate=baud_rate
+		# self.queue_size=queue_size
+		self.serial = None
+
+	def open(self):
+		# open serial port on thread startup
+		self.serial = serial.Serial(self.port,self.baud_rate)
+		self.serial.flushInput()
+
+	def close(self):
+		# close serial port
+		self.serial.flush()
+		self.serial.close()
+
+	def run(self):
+		print("Data collection start, press CTRL+C to stop")
+		while self.event.is_set():
+			time.sleep(1)
+			raw_data = self.serial.readline()
+			print(self.event.is_set(),raw_data)
+
 def main():
-	ser = serial.Serial(COM_PORT,BAUD_RATES)
-	ser.flushInput()
-	plot_window = 480
+	data_size=480
+	data = deque([0.0]*data_size)
+	lock = threading.Lock()
 
-	if PLOT:
-		y_var = np.array(np.zeros([plot_window]))
-		plt.ion()
-		fig, ax = plt.subplots()
-		line, = ax.plot(y_var)
+	running_event = threading.Event()
+	running_event.set()
 
-	ecg = []
-	ir = []
-	red = []
+	collector = HealthyPiCollector(data,COM_PORT,lock,running_event,BAUD_RATES)
+	collector.open()
+	collector.start()
 
 	while True:
-		start_time = time.time()
-		data_raw = ser.readline()
+		try:
+			print("hello")
+			# collector.join(0.1)
+		except KeyboardInterrupt:
+			print("Stopping data collection, wait till serial port close...")
+			running_event.clear()
+			collector.join()
+			collector.close()
+			print("Stopped data collection")
+			sys.exit()
 
-		if not len(data_raw) == 27:
-			continue
+	# if PLOT:
+	# 	y_var = np.array(np.zeros([plot_window]))
+	# 	plt.ion()
+	# 	fig, ax = plt.subplots()
+	# 	line, = ax.plot(y_var)
+
+	# ecg = []
+	# ir = []
+	# red = []
+
+	# while True:
+	# 	start_time = time.time()
+	# 	data_raw = ser.readline()
+
+	# 	if not len(data_raw) == 27:
+	# 		continue
 		
-		ECG = int.from_bytes(data_raw[4:6], byteorder='big',signed=True)
-		resp_val = int.from_bytes(data_raw[6:8], byteorder='big',signed=True)
+	# 	ECG = int.from_bytes(data_raw[4:6], byteorder='big',signed=True)
+	# 	resp_val = int.from_bytes(data_raw[6:8], byteorder='big',signed=True)
 		
-		# PPG
-		ppg_ir_val_ = []
-		ppg_ir_val_.append(int.from_bytes(data_raw[8:9], byteorder='big',signed=False))
-		ppg_ir_val_.append(int.from_bytes(data_raw[9:10], byteorder='big',signed=False))
-		ppg_ir_val_.append(int.from_bytes(data_raw[10:11], byteorder='big',signed=False))
-		ppg_ir_val_.append(int.from_bytes(data_raw[11:12], byteorder='big',signed=False))
-		ppg_ir_val = reversePacket(ppg_ir_val_,len(ppg_ir_val_)-1)
+	# 	# PPG
+	# 	ppg_ir_val_ = []
+	# 	ppg_ir_val_.append(int.from_bytes(data_raw[8:9], byteorder='big',signed=False))
+	# 	ppg_ir_val_.append(int.from_bytes(data_raw[9:10], byteorder='big',signed=False))
+	# 	ppg_ir_val_.append(int.from_bytes(data_raw[10:11], byteorder='big',signed=False))
+	# 	ppg_ir_val_.append(int.from_bytes(data_raw[11:12], byteorder='big',signed=False))
+	# 	ppg_ir_val = reversePacket(ppg_ir_val_,len(ppg_ir_val_)-1)
 
-		ir.append(ppg_ir_val)
-		if len(ir) < plot_window:
-			pass
-		else:
-			ir = ir[1:plot_window+1]
-		irAvg = np.mean(ir)
-		ppg_ir_val = (ir[len(ir)-1]-irAvg)
-		# if ppg_ir_val < 0:
-		# 	ppg_ir_val = 0
-		# else:
-		# 	ppg_ir_val = ppg_ir_val
+	# 	ir.append(ppg_ir_val)
+	# 	if len(ir) < plot_window:
+	# 		pass
+	# 	else:
+	# 		ir = ir[1:plot_window+1]
+	# 	irAvg = np.mean(ir)
+	# 	ppg_ir_val = (ir[len(ir)-1]-irAvg)
+	# 	# if ppg_ir_val < 0:
+	# 	# 	ppg_ir_val = 0
+	# 	# else:
+	# 	# 	ppg_ir_val = ppg_ir_val
 
-		# ppg_ir_val = int.from_bytes(data_raw[8:12], byteorder='big',signed=True)
-		ppg_red_val_ = []
-		ppg_red_val_.append(int.from_bytes(data_raw[12:13], byteorder='big',signed=False))
-		ppg_red_val_.append(int.from_bytes(data_raw[13:14], byteorder='big',signed=False))
-		ppg_red_val_.append(int.from_bytes(data_raw[14:15], byteorder='big',signed=False))
-		ppg_red_val_.append(int.from_bytes(data_raw[15:16], byteorder='big',signed=False))
-		ppg_red_val = reversePacket(ppg_red_val_,len(ppg_red_val_)-1)
+	# 	ppg_red_val_ = []
+	# 	ppg_red_val_.append(int.from_bytes(data_raw[12:13], byteorder='big',signed=False))
+	# 	ppg_red_val_.append(int.from_bytes(data_raw[13:14], byteorder='big',signed=False))
+	# 	ppg_red_val_.append(int.from_bytes(data_raw[14:15], byteorder='big',signed=False))
+	# 	ppg_red_val_.append(int.from_bytes(data_raw[15:16], byteorder='big',signed=False))
+	# 	ppg_red_val = reversePacket(ppg_red_val_,len(ppg_red_val_)-1)
 		
-		# temperature
-		temp0 = int.from_bytes(data_raw[16:17],byteorder='big',signed=False)
-		temp1 = int.from_bytes(data_raw[17:18],byteorder='big',signed=False)
-		temp = (temp0 | temp1<<8)/100
+	# 	# temperature
+	# 	temp0 = int.from_bytes(data_raw[16:17],byteorder='big',signed=False)
+	# 	temp1 = int.from_bytes(data_raw[17:18],byteorder='big',signed=False)
+	# 	temp = (temp0 | temp1<<8)/100
 
-		# print()
-		# temp = int.from_bytes(data_raw[16:18], byteorder='big',signed=True)
-		resp_rate = int.from_bytes(data_raw[18:19], byteorder='big',signed=False)
-		sp02 = int.from_bytes(data_raw[19:20], byteorder='big',signed=False)
-		heart_rate = int.from_bytes(data_raw[20:21], byteorder='big',signed=False)
-		# bp = int.from_bytes(data_raw[21:24], byteorder='big',signed=True)
-		lead_status = int.from_bytes(data_raw[23:24], byteorder='big',signed=False)
+	# 	resp_rate = int.from_bytes(data_raw[18:19], byteorder='big',signed=False)
+	# 	sp02 = int.from_bytes(data_raw[19:20], byteorder='big',signed=False)
+	# 	heart_rate = int.from_bytes(data_raw[20:21], byteorder='big',signed=False)
+	# 	# bp = int.from_bytes(data_raw[21:24], byteorder='big',signed=True)
+	# 	lead_status = int.from_bytes(data_raw[23:24], byteorder='big',signed=False)
 
-		# check ecg lead status
-		lead_status_ecg = lead_status
-		lead_status_ecg &= 1
-		if (lead_status_ecg == 1):
-			print("ECG lead error")
-		else:
-			print("ECG lead connected")
+	# 	# check ecg lead status
+	# 	lead_status_ecg = lead_status
+	# 	lead_status_ecg &= 1
+	# 	if (lead_status_ecg == 1):
+	# 		print("ECG lead error")
+	# 	else:
+	# 		print("ECG lead connected")
 
-		lead_status_ppg = lead_status
-		lead_status_ppg &= 2
-		if (lead_status_ppg == 2):
-			print("PPG error")
-		else:
-			print("PPG connected")
+	# 	lead_status_ppg = lead_status
+	# 	lead_status_ppg &= 2
+	# 	if (lead_status_ppg == 2):
+	# 		print("PPG error")
+	# 	else:
+	# 		print("PPG connected")
 
 
-		print("ECG:",ECG)
-		print("Respiration Value:",resp_val)
-		print("PPG IR Value:",ppg_ir_val)
-		print("PPG Red Value:",ppg_red_val)
-		print("Temperature:",temp)
-		print("Respiration Rate:",resp_rate)
-		print("SpO2:",sp02)
-		print("Heart Rate:",heart_rate)
-		print("SpO2 and ECG lead status:",lead_status)
-		# SpO2 = int.from_bytes(data_raw[20:21], byteorder='big', signed=True)
-		# print(SpO2)
+	# 	print("ECG:",ECG)
+	# 	print("Respiration Value:",resp_val)
+	# 	print("PPG IR Value:",ppg_ir_val)
+	# 	print("PPG Red Value:",ppg_red_val)
+	# 	print("Temperature:",temp)
+	# 	print("Respiration Rate:",resp_rate)
+	# 	print("SpO2:",sp02)
+	# 	print("Heart Rate:",heart_rate)
+	# 	print("SpO2 and ECG lead status:",lead_status)
 		
-		# data = data_raw.decode()
+	# 	# data = data_raw.decode()
 		
-		# print(data)
-		if PLOT:
-			y_var = np.append(y_var,ppg_ir_val)
-			y_var = y_var[1:plot_window+1]
-			line.set_ydata(y_var)
-			ax.relim()
-			ax.autoscale_view()
-			fig.canvas.draw()
-			fig.canvas.flush_events()
+	# 	# print(data)
+	# 	if PLOT:
+	# 		y_var = np.append(y_var,ppg_ir_val)
+	# 		y_var = y_var[1:plot_window+1]
+	# 		line.set_ydata(y_var)
+	# 		ax.relim()
+	# 		ax.autoscale_view()
+	# 		fig.canvas.draw()
+	# 		fig.canvas.flush_events()
 
 		
-		print("loop time:",time.time()-start_time)
-		# exit()
+	# 	print("loop time:",time.time()-start_time)
+	# 	# exit()
 
 
 if __name__=="__main__":
