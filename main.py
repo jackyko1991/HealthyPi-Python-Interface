@@ -12,6 +12,8 @@ from collections import deque
 import datetime
 import signal
 import sys
+import argparse
+import os
 
 COM_PORT = 'COM3'
 BAUD_RATES = 57600
@@ -30,14 +32,12 @@ class HealthyPiCollector(threading.Thread):
 		The HealthyPi class will spawn a sparate thread to avoid main thread blocking during data collection
 	"""
 	def __init__(self,data,port,lock,event,baud_rate=57600):
-
 		super(HealthyPiCollector, self).__init__()
 		self.data=data
 		self.port=port
 		self.lock=lock
 		self.event=event
 		self.baud_rate=baud_rate
-		# self.queue_size=queue_size
 		self.serial = None
 
 	def open(self):
@@ -53,19 +53,30 @@ class HealthyPiCollector(threading.Thread):
 	def run(self):
 		print("Data collection start, press CTRL+C to stop")
 		while self.event.is_set():
-			time.sleep(1)
 			raw_data = self.serial.readline()
 			print(self.event.is_set(),raw_data)
 
-def main():
-	data_size=480
-	data = deque([0.0]*data_size)
+def main(args):
+	if args.csv:
+		# create folder for data export
+		if not os.path.exists(args.ouptut_folder):
+			os.makedirs(args.ouptut_folder)
+
+		# create csv files
+		dt = datetime.datetime.now()
+		datetime_str = dt.strftime("%Y%m%d-%H%M%S")
+		signalsCsv = open(args.ouptut_folder + "/"+ args.prefix + "_" + datetime_str + "_Signals.csv",'w')
+		numericsCsv = open(args.ouptut_folder + "/"+ args.prefix + "_" + datetime_str + "_Numerics.csv",'w')
+
+
+
+	data = deque([])
 	lock = threading.Lock()
 
 	running_event = threading.Event()
 	running_event.set()
 
-	collector = HealthyPiCollector(data,COM_PORT,lock,running_event,BAUD_RATES)
+	collector = HealthyPiCollector(data,args.port,lock,running_event,BAUD_RATES)
 	collector.open()
 	collector.start()
 
@@ -181,9 +192,56 @@ def main():
 	# 	print("loop time:",time.time()-start_time)
 	# 	# exit()
 
+def get_parser():
+	parser = argparse.ArgumentParser(description="HealthyPiv3 Python data collector")
+
+	parser.add_argument(
+		'-v', '--verbose',
+		dest='verbose',
+		help='Show verbose output',
+		action='store_true')
+	parser.add_argument(
+		'-p','--port',
+		dest='port',
+		help="HealthyPiv3 Port",
+		metavar='PORT'
+		)
+	parser.add_argument(
+		'-c','--csv',
+		dest='csv',
+		help='Option to output csv',
+		action='store_true')
+	parser.add_argument(
+		'-o','--ouput_folder',
+		dest='ouptut_folder',
+		help='CSV output folder (default=./data)',
+		default='./data',
+		metavar='DIR')
+	parser.add_argument(
+		'-pre','--prefix',
+		dest='prefix',
+		help='Prefix of output csv files (default=healthypiv3)',
+		default='healthypiv3',
+		metavar='STR')
+
+	# args = parser.parse_args()
+	args = parser.parse_args([
+		'-v',
+		'-p',COM_PORT,
+		'-c',
+		])
+
+	# print arguments if verbose
+	if args.verbose:
+		args_dict = vars(args)
+		for key in sorted(args_dict):
+			print("{} = {}".format(str(key), str(args_dict[key])))
+
+	return args
 
 if __name__=="__main__":
-	main()
+	args = get_parser()
+	main(args)
 
 
 
