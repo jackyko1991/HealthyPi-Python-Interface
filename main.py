@@ -63,6 +63,7 @@ class HealthyPiCollector(threading.Thread):
 
 	def run(self):
 		print("Data collection start, press CTRL+C to stop")
+		start_time = datetime.datetime.now()
 		while self.event.is_set():
 			raw_data = self.serial.readline()
 
@@ -72,7 +73,8 @@ class HealthyPiCollector(threading.Thread):
 
 			# get current datatime
 			dt = str(datetime.datetime.now())
-
+			# elapsed_time in second:
+			elapsed_time = str((datetime.datetime.now() - start_time).total_seconds())
 			# convert raw data to human readable values, reference: http://healthypi.protocentral.com/ "Streaming Packet Format"
 			ecg = raw2int(raw_data,5,6)
 			resp = raw2int(raw_data,7,8)
@@ -86,6 +88,12 @@ class HealthyPiCollector(threading.Thread):
 			# bp = int.from_bytes(data_raw[21:24], byteorder='big',signed=True)
 			lead_status = int.from_bytes(raw_data[23:24], byteorder='big',signed=False)
 
+			# check ecg lead status
+			lead_status_ecg = lead_status
+			lead_status_ecg &= 1
+			lead_status_ppg = lead_status
+			lead_status_ppg &= 2
+
 			if self.verbose:
 				print(dt + ": ")
 				print("ECG Value:",ecg)
@@ -96,7 +104,43 @@ class HealthyPiCollector(threading.Thread):
 				print("Respiration Rate:",resp_rate)
 				print("SpO2:",sp02)
 				print("Heart Rate:",heart_rate)
-				print("SpO2 and ECG lead status:",lead_status)
+				# print("SpO2 and ECG lead status:",lead_status)
+				if (lead_status_ecg == 1):
+					print("ECG lead error")
+					lead_status_ecg = 0
+				else:
+					print("ECG lead connected")
+					lead_status_ecg = 1
+				if (lead_status_ppg == 2):
+					print("PPG error")
+					lead_status_ppg = 0
+				else:
+					print("PPG connected")
+					lead_status_ppg = 1
+
+			# write to csv
+			if self.signals_csv_writer is not None:
+				signals_row = {
+					'Time [s]': elapsed_time,
+					'RESP': resp,
+					'PLETH': ppg_ir,
+					'II': ecg,
+					'Status ECG': lead_status_ecg,
+					'Status PPG': lead_status_ppg
+				}
+				self.signals_csv_writer.writerow(signals_row)
+
+			if self.numerics_csv_writer is not None:
+				numerics_row = {
+					'Time [s]': elapsed_time, 
+					'HR': heart_rate, 
+					'PULSE': heart_rate, 
+					'RESP': resp_rate, 
+					'SpO2': sp02,
+					'Status ECG': lead_status_ecg,
+					'Status PPG': lead_status_ppg
+				}
+				self.numerics_csv_writer.writerow(numerics_row)
 
 	# 	ir.append(ppg_ir_val)
 	# 	if len(ir) < plot_window:
@@ -110,27 +154,6 @@ class HealthyPiCollector(threading.Thread):
 	# 	# else:
 	# 	# 	ppg_ir_val = ppg_ir_val
 
-
-	# 	# check ecg lead status
-	# 	lead_status_ecg = lead_status
-	# 	lead_status_ecg &= 1
-	# 	if (lead_status_ecg == 1):
-	# 		print("ECG lead error")
-	# 	else:
-	# 		print("ECG lead connected")
-
-	# 	lead_status_ppg = lead_status
-	# 	lead_status_ppg &= 2
-	# 	if (lead_status_ppg == 2):
-	# 		print("PPG error")
-	# 	else:
-	# 		print("PPG connected")
-
-
-
-
-			
-
 def main(args):
 	### CSV part
 	if args.csv:
@@ -143,8 +166,8 @@ def main(args):
 		datetime_str = dt.strftime("%Y%m%d-%H%M%S")
 		signalsCsv = open(args.ouptut_folder + "/"+ args.prefix + "_" + datetime_str + "_Signals.csv",'w',newline='')
 		numericsCsv = open(args.ouptut_folder + "/"+ args.prefix + "_" + datetime_str + "_Numerics.csv",'w',newline='')
-		signalsWriter = csv.DictWriter(signalsCsv, fieldnames = ["Time [s]", "RESP", "PLETH", "II"])
-		numericsWriter = csv.DictWriter(numericsCsv, fieldnames = ["Time [s]", "HR", "PULSE", "RESP", "SpO2"])
+		signalsWriter = csv.DictWriter(signalsCsv, fieldnames = ["Time [s]", "RESP", "PLETH", "II", "Status ECG", "Status PPG"])
+		numericsWriter = csv.DictWriter(numericsCsv, fieldnames = ["Time [s]", "HR", "PULSE", "RESP", "SpO2", "Status ECG", "Status PPG"])
 		signalsWriter.writeheader()
 		numericsWriter.writeheader()
 
@@ -155,18 +178,25 @@ def main(args):
 	running_event.set()
 
 	collector = HealthyPiCollector(data,args.port,lock,running_event,verbose=True)
+	if args.csv:
+		collector.signals_csv_writer = signalsWriter
+		collector.numerics_csv_writer = numericsWriter
 	collector.open()
 	collector.start()
 
 	while True:
 		try:
-			print("hello")
-			collector.join(0.1)
+			# need to give some blocking time main thread to intercept keyboard interrupt
+			collector.join(0.0001)
 		except KeyboardInterrupt:
 			print("Stopping data collection, wait till serial port close...")
 			running_event.clear()
 			collector.join()
 			collector.close()
+			if args.csv:
+				signalsCsv.close()
+				numericsCsv.close()
+
 			print("Stopped data collection")
 			sys.exit()
 
@@ -238,7 +268,7 @@ def get_parser():
 	args = parser.parse_args([
 		'-v',
 		'-p',COM_PORT,
-		# '-c',
+		'-c',
 		])
 
 	# print arguments if verbose
