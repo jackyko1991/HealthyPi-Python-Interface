@@ -27,18 +27,29 @@ def reversePacket(dataPacket,n):
 
 # fast plotting https://gist.github.com/electronut/d5e5f68c610821e311b0
 
+def raw2int(raw,offset_start,offset_end):
+	val_ = []
+	for i in range(offset_start,offset_end+1):
+		val_.append(int.from_bytes(raw[i-1:i],byteorder='big',signed=False))
+	val = reversePacket(val_,len(val_)-1)
+
+	return val
+
 class HealthyPiCollector(threading.Thread):
 	"""
 		The HealthyPi class will spawn a sparate thread to avoid main thread blocking during data collection
 	"""
-	def __init__(self,data,port,lock,event,baud_rate=57600):
+	def __init__(self,data,port,lock,event,baud_rate=57600,signals_csv_writer=None,numerics_csv_writer=None, verbose=False):
 		super(HealthyPiCollector, self).__init__()
-		self.data=data
-		self.port=port
-		self.lock=lock
-		self.event=event
-		self.baud_rate=baud_rate
+		self.data = data
+		self.port = port
+		self.lock = lock
+		self.event = event
+		self.baud_rate = baud_rate
 		self.serial = None
+		self.signals_csv_writer = signals_csv_writer
+		self.numerics_csv_writer = numerics_csv_writer
+		self.verbose = verbose
 
 	def open(self):
 		# open serial port on thread startup
@@ -54,9 +65,74 @@ class HealthyPiCollector(threading.Thread):
 		print("Data collection start, press CTRL+C to stop")
 		while self.event.is_set():
 			raw_data = self.serial.readline()
-			print(self.event.is_set(),raw_data)
+
+			# received data should be 27 bytes
+			if not len(raw_data) == 27:
+				continue
+
+			# get current datatime
+			dt = str(datetime.datetime.now())
+
+			# convert raw data to human readable values, reference: http://healthypi.protocentral.com/ "Streaming Packet Format"
+			ecg = raw2int(raw_data,5,6)
+			resp = raw2int(raw_data,7,8)
+			ppg_ir = raw2int(raw_data,9,12)
+			ppg_red = raw2int(raw_data,13,16)
+			temp = raw2int(raw_data,17,18)/100
+			resp_rate = int.from_bytes(raw_data[18:19], byteorder='big',signed=False)
+			sp02 = int.from_bytes(raw_data[19:20], byteorder='big',signed=False)
+			heart_rate = int.from_bytes(raw_data[20:21], byteorder='big',signed=False)
+			# bp not implemented
+			# bp = int.from_bytes(data_raw[21:24], byteorder='big',signed=True)
+			lead_status = int.from_bytes(raw_data[23:24], byteorder='big',signed=False)
+
+			if self.verbose:
+				print(dt + ": ")
+				print("ECG Value:",ecg)
+				print("Respiration Value:",resp)
+				print("PPG IR Value:",ppg_ir)
+				print("PPG Red Value:",ppg_red)
+				print("Temperature:",temp)
+				print("Respiration Rate:",resp_rate)
+				print("SpO2:",sp02)
+				print("Heart Rate:",heart_rate)
+				print("SpO2 and ECG lead status:",lead_status)
+
+	# 	ir.append(ppg_ir_val)
+	# 	if len(ir) < plot_window:
+	# 		pass
+	# 	else:
+	# 		ir = ir[1:plot_window+1]
+	# 	irAvg = np.mean(ir)
+	# 	ppg_ir_val = (ir[len(ir)-1]-irAvg)
+	# 	# if ppg_ir_val < 0:
+	# 	# 	ppg_ir_val = 0
+	# 	# else:
+	# 	# 	ppg_ir_val = ppg_ir_val
+
+
+	# 	# check ecg lead status
+	# 	lead_status_ecg = lead_status
+	# 	lead_status_ecg &= 1
+	# 	if (lead_status_ecg == 1):
+	# 		print("ECG lead error")
+	# 	else:
+	# 		print("ECG lead connected")
+
+	# 	lead_status_ppg = lead_status
+	# 	lead_status_ppg &= 2
+	# 	if (lead_status_ppg == 2):
+	# 		print("PPG error")
+	# 	else:
+	# 		print("PPG connected")
+
+
+
+
+			
 
 def main(args):
+	### CSV part
 	if args.csv:
 		# create folder for data export
 		if not os.path.exists(args.ouptut_folder):
@@ -65,10 +141,12 @@ def main(args):
 		# create csv files
 		dt = datetime.datetime.now()
 		datetime_str = dt.strftime("%Y%m%d-%H%M%S")
-		signalsCsv = open(args.ouptut_folder + "/"+ args.prefix + "_" + datetime_str + "_Signals.csv",'w')
-		numericsCsv = open(args.ouptut_folder + "/"+ args.prefix + "_" + datetime_str + "_Numerics.csv",'w')
-
-
+		signalsCsv = open(args.ouptut_folder + "/"+ args.prefix + "_" + datetime_str + "_Signals.csv",'w',newline='')
+		numericsCsv = open(args.ouptut_folder + "/"+ args.prefix + "_" + datetime_str + "_Numerics.csv",'w',newline='')
+		signalsWriter = csv.DictWriter(signalsCsv, fieldnames = ["Time [s]", "RESP", "PLETH", "II"])
+		numericsWriter = csv.DictWriter(numericsCsv, fieldnames = ["Time [s]", "HR", "PULSE", "RESP", "SpO2"])
+		signalsWriter.writeheader()
+		numericsWriter.writeheader()
 
 	data = deque([])
 	lock = threading.Lock()
@@ -76,14 +154,14 @@ def main(args):
 	running_event = threading.Event()
 	running_event.set()
 
-	collector = HealthyPiCollector(data,args.port,lock,running_event,BAUD_RATES)
+	collector = HealthyPiCollector(data,args.port,lock,running_event,verbose=True)
 	collector.open()
 	collector.start()
 
 	while True:
 		try:
 			print("hello")
-			# collector.join(0.1)
+			collector.join(0.1)
 		except KeyboardInterrupt:
 			print("Stopping data collection, wait till serial port close...")
 			running_event.clear()
@@ -106,75 +184,7 @@ def main(args):
 	# 	start_time = time.time()
 	# 	data_raw = ser.readline()
 
-	# 	if not len(data_raw) == 27:
-	# 		continue
-		
-	# 	ECG = int.from_bytes(data_raw[4:6], byteorder='big',signed=True)
-	# 	resp_val = int.from_bytes(data_raw[6:8], byteorder='big',signed=True)
-		
-	# 	# PPG
-	# 	ppg_ir_val_ = []
-	# 	ppg_ir_val_.append(int.from_bytes(data_raw[8:9], byteorder='big',signed=False))
-	# 	ppg_ir_val_.append(int.from_bytes(data_raw[9:10], byteorder='big',signed=False))
-	# 	ppg_ir_val_.append(int.from_bytes(data_raw[10:11], byteorder='big',signed=False))
-	# 	ppg_ir_val_.append(int.from_bytes(data_raw[11:12], byteorder='big',signed=False))
-	# 	ppg_ir_val = reversePacket(ppg_ir_val_,len(ppg_ir_val_)-1)
 
-	# 	ir.append(ppg_ir_val)
-	# 	if len(ir) < plot_window:
-	# 		pass
-	# 	else:
-	# 		ir = ir[1:plot_window+1]
-	# 	irAvg = np.mean(ir)
-	# 	ppg_ir_val = (ir[len(ir)-1]-irAvg)
-	# 	# if ppg_ir_val < 0:
-	# 	# 	ppg_ir_val = 0
-	# 	# else:
-	# 	# 	ppg_ir_val = ppg_ir_val
-
-	# 	ppg_red_val_ = []
-	# 	ppg_red_val_.append(int.from_bytes(data_raw[12:13], byteorder='big',signed=False))
-	# 	ppg_red_val_.append(int.from_bytes(data_raw[13:14], byteorder='big',signed=False))
-	# 	ppg_red_val_.append(int.from_bytes(data_raw[14:15], byteorder='big',signed=False))
-	# 	ppg_red_val_.append(int.from_bytes(data_raw[15:16], byteorder='big',signed=False))
-	# 	ppg_red_val = reversePacket(ppg_red_val_,len(ppg_red_val_)-1)
-		
-	# 	# temperature
-	# 	temp0 = int.from_bytes(data_raw[16:17],byteorder='big',signed=False)
-	# 	temp1 = int.from_bytes(data_raw[17:18],byteorder='big',signed=False)
-	# 	temp = (temp0 | temp1<<8)/100
-
-	# 	resp_rate = int.from_bytes(data_raw[18:19], byteorder='big',signed=False)
-	# 	sp02 = int.from_bytes(data_raw[19:20], byteorder='big',signed=False)
-	# 	heart_rate = int.from_bytes(data_raw[20:21], byteorder='big',signed=False)
-	# 	# bp = int.from_bytes(data_raw[21:24], byteorder='big',signed=True)
-	# 	lead_status = int.from_bytes(data_raw[23:24], byteorder='big',signed=False)
-
-	# 	# check ecg lead status
-	# 	lead_status_ecg = lead_status
-	# 	lead_status_ecg &= 1
-	# 	if (lead_status_ecg == 1):
-	# 		print("ECG lead error")
-	# 	else:
-	# 		print("ECG lead connected")
-
-	# 	lead_status_ppg = lead_status
-	# 	lead_status_ppg &= 2
-	# 	if (lead_status_ppg == 2):
-	# 		print("PPG error")
-	# 	else:
-	# 		print("PPG connected")
-
-
-	# 	print("ECG:",ECG)
-	# 	print("Respiration Value:",resp_val)
-	# 	print("PPG IR Value:",ppg_ir_val)
-	# 	print("PPG Red Value:",ppg_red_val)
-	# 	print("Temperature:",temp)
-	# 	print("Respiration Rate:",resp_rate)
-	# 	print("SpO2:",sp02)
-	# 	print("Heart Rate:",heart_rate)
-	# 	print("SpO2 and ECG lead status:",lead_status)
 		
 	# 	# data = data_raw.decode()
 		
@@ -228,7 +238,7 @@ def get_parser():
 	args = parser.parse_args([
 		'-v',
 		'-p',COM_PORT,
-		'-c',
+		# '-c',
 		])
 
 	# print arguments if verbose
