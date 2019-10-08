@@ -16,8 +16,6 @@ import argparse
 import os
 
 COM_PORT = 'COM3'
-BAUD_RATES = 57600
-PLOT = True # plot slow down the program to around 12FPS and causes signal blocking
 
 def reversePacket(dataPacket,n):
 	if n == 0:
@@ -82,7 +80,7 @@ class HealthyPiCollector(threading.Thread):
 			ppg_red = raw2int(raw_data,13,16)
 			temp = raw2int(raw_data,17,18)/100
 			resp_rate = int.from_bytes(raw_data[18:19], byteorder='big',signed=False)
-			sp02 = int.from_bytes(raw_data[19:20], byteorder='big',signed=False)
+			spo2 = int.from_bytes(raw_data[19:20], byteorder='big',signed=False)
 			heart_rate = int.from_bytes(raw_data[20:21], byteorder='big',signed=False)
 			# bp not implemented
 			# bp = int.from_bytes(data_raw[21:24], byteorder='big',signed=True)
@@ -94,6 +92,22 @@ class HealthyPiCollector(threading.Thread):
 			lead_status_ppg = lead_status
 			lead_status_ppg &= 2
 
+			data = {
+				"time":elapsed_time, 
+				"ecg":ecg,
+				"resp":resp,
+				"ppg_ir":ppg_ir,
+				"ppg_red":ppg_red,
+				"temp":temp,
+				"resp_rate":resp_rate,
+				"spo2":spo2,
+				"heart_rate":heart_rate,
+				"lead_status_ecg":lead_status_ecg,
+				"lead_status_ppg":lead_status_ppg
+			}
+
+			self.data.append(data)
+
 			if self.verbose:
 				print(dt + ": ")
 				print("ECG Value:",ecg)
@@ -102,7 +116,7 @@ class HealthyPiCollector(threading.Thread):
 				print("PPG Red Value:",ppg_red)
 				print("Temperature:",temp)
 				print("Respiration Rate:",resp_rate)
-				print("SpO2:",sp02)
+				print("SpO2:",spo2)
 				print("Heart Rate:",heart_rate)
 				# print("SpO2 and ECG lead status:",lead_status)
 				if (lead_status_ecg == 1):
@@ -122,23 +136,23 @@ class HealthyPiCollector(threading.Thread):
 			if self.signals_csv_writer is not None:
 				signals_row = {
 					'Time [s]': elapsed_time,
-					'RESP': resp,
-					'PLETH': ppg_ir,
-					'II': ecg,
-					'Status ECG': lead_status_ecg,
-					'Status PPG': lead_status_ppg
+					' RESP': resp,
+					' PLETH': ppg_ir,
+					' II': ecg,
+					' Status ECG': lead_status_ecg,
+					' Status PPG': lead_status_ppg
 				}
 				self.signals_csv_writer.writerow(signals_row)
 
 			if self.numerics_csv_writer is not None:
 				numerics_row = {
 					'Time [s]': elapsed_time, 
-					'HR': heart_rate, 
-					'PULSE': heart_rate, 
-					'RESP': resp_rate, 
-					'SpO2': sp02,
-					'Status ECG': lead_status_ecg,
-					'Status PPG': lead_status_ppg
+					' HR': heart_rate, 
+					' PULSE': heart_rate, 
+					' RESP': resp_rate, 
+					' SpO2': spo2,
+					' Status ECG': lead_status_ecg,
+					' Status PPG': lead_status_ppg
 				}
 				self.numerics_csv_writer.writerow(numerics_row)
 
@@ -166,8 +180,8 @@ def main(args):
 		datetime_str = dt.strftime("%Y%m%d-%H%M%S")
 		signalsCsv = open(args.ouptut_folder + "/"+ args.prefix + "_" + datetime_str + "_Signals.csv",'w',newline='')
 		numericsCsv = open(args.ouptut_folder + "/"+ args.prefix + "_" + datetime_str + "_Numerics.csv",'w',newline='')
-		signalsWriter = csv.DictWriter(signalsCsv, fieldnames = ["Time [s]", "RESP", "PLETH", "II", "Status ECG", "Status PPG"])
-		numericsWriter = csv.DictWriter(numericsCsv, fieldnames = ["Time [s]", "HR", "PULSE", "RESP", "SpO2", "Status ECG", "Status PPG"])
+		signalsWriter = csv.DictWriter(signalsCsv, fieldnames = ["Time [s]", " RESP", " PLETH", " II", " Status ECG", " Status PPG"])
+		numericsWriter = csv.DictWriter(numericsCsv, fieldnames = ["Time [s]", " HR", " PULSE", " RESP", " SpO2", " Status ECG", " Status PPG"])
 		signalsWriter.writeheader()
 		numericsWriter.writeheader()
 
@@ -178,18 +192,55 @@ def main(args):
 	running_event.set()
 
 	collector = HealthyPiCollector(data,args.port,lock,running_event,verbose=True)
+	collector.verbose=False
 	if args.csv:
 		collector.signals_csv_writer = signalsWriter
 		collector.numerics_csv_writer = numericsWriter
 	collector.open()
 	collector.start()
 
+	if args.graph:
+		plot_window = 480
+		y_ecg = np.array(np.zeros([plot_window]))
+		y_ppg = np.array(np.zeros([plot_window]))
+		y_resp = np.array(np.zeros([plot_window]))
+		plt.ion()
+		fig, axs = plt.subplots(3,1)
+		line_ecg = axs[0].plot(y_ecg)
+		line_ppg = axs[1].plot(y_ppg)
+		line_resp = axs[2].plot(y_resp)
+		axs[0].set_xlim(0, plot_window)
+		axs[1].set_xlim(0, plot_window)
+		axs[2].set_xlim(0, plot_window)
+		plt.show()
+		
 	while True:
 		try:
 			# need to give some blocking time main thread to intercept keyboard interrupt
 			collector.join(0.0001)
+			if args.graph:
+				y_ecg = np.append(y_ecg,collector.data[-1]["ecg"])
+				y_ecg = y_ecg[1:plot_window+1]
+				y_ppg = np.append(y_ppg,collector.data[-1]["ppg_ir"])
+				y_ppg = y_ppg[1:plot_window+1]
+				y_resp = np.append(y_resp,collector.data[-1]["resp"])
+				y_resp = y_resp[1:plot_window+1]
+				line_ecg[0].set_ydata(y_ecg)
+				line_ppg[0].set_ydata(y_ppg)
+				line_resp[0].set_ydata(y_resp)
+				axs[0].relim()
+				axs[0].autoscale_view()
+				axs[1].relim()
+				axs[1].autoscale_view()
+				axs[2].relim()
+				axs[2].autoscale_view()
+				fig.canvas.draw()
+				fig.canvas.flush_events()
+
 		except KeyboardInterrupt:
 			print("Stopping data collection, wait till serial port close...")
+			if args.graph:
+				plt.close(fig)
 			running_event.clear()
 			collector.join()
 			collector.close()
@@ -199,38 +250,6 @@ def main(args):
 
 			print("Stopped data collection")
 			sys.exit()
-
-	# if PLOT:
-	# 	y_var = np.array(np.zeros([plot_window]))
-	# 	plt.ion()
-	# 	fig, ax = plt.subplots()
-	# 	line, = ax.plot(y_var)
-
-	# ecg = []
-	# ir = []
-	# red = []
-
-	# while True:
-	# 	start_time = time.time()
-	# 	data_raw = ser.readline()
-
-
-		
-	# 	# data = data_raw.decode()
-		
-	# 	# print(data)
-	# 	if PLOT:
-	# 		y_var = np.append(y_var,ppg_ir_val)
-	# 		y_var = y_var[1:plot_window+1]
-	# 		line.set_ydata(y_var)
-	# 		ax.relim()
-	# 		ax.autoscale_view()
-	# 		fig.canvas.draw()
-	# 		fig.canvas.flush_events()
-
-		
-	# 	print("loop time:",time.time()-start_time)
-	# 	# exit()
 
 def get_parser():
 	parser = argparse.ArgumentParser(description="HealthyPiv3 Python data collector")
@@ -263,13 +282,19 @@ def get_parser():
 		help='Prefix of output csv files (default=healthypiv3)',
 		default='healthypiv3',
 		metavar='STR')
+	parser.add_argument(
+		'-g','--graph',
+		dest='graph',
+		help='Plot the data collection graph',
+		action='store_true')
 
-	# args = parser.parse_args()
-	args = parser.parse_args([
-		'-v',
-		'-p',COM_PORT,
-		'-c',
-		])
+	args = parser.parse_args()
+	# args = parser.parse_args([
+	# 	'-v',
+	# 	'-p',COM_PORT,
+	# 	'-c',
+	# 	'-g',
+	# 	])
 
 	# print arguments if verbose
 	if args.verbose:
@@ -282,30 +307,3 @@ def get_parser():
 if __name__=="__main__":
 	args = get_parser()
 	main(args)
-
-
-
-
-
-
-
-# while True:
-#     try:
-#         ser_bytes = ser.readline()
-#         try:
-#             decoded_bytes = float(ser_bytes[0:len(ser_bytes)-2].decode("utf-8"))
-#             print(decoded_bytes)
-#         except:
-#             continue
-#         with open("test_data.csv","a") as f:
-#             writer = csv.writer(f,delimiter=",")
-#             writer.writerow([time.time(),decoded_bytes])
-#         y_var = np.append(y_var,decoded_bytes)
-#         y_var = y_var[1:plot_window+1]
-#         line.set_ydata(y_var)
-#         ax.relim()
-#         ax.autoscale_view()
-#         fig.canvas.draw()
-#         fig.canvas.flush_events()
-#     except:
-#         print("Keyboard Interrupt")
