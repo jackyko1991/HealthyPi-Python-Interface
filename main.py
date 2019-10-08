@@ -15,15 +15,11 @@ import sys
 import argparse
 import os
 
-COM_PORT = 'COM3'
-
 def reversePacket(dataPacket,n):
 	if n == 0:
 		return dataPacket[n]<<(n*8)
 	else:
 		return (dataPacket[n]<<(n*8))| reversePacket(dataPacket, n-1)
-
-# fast plotting https://gist.github.com/electronut/d5e5f68c610821e311b0
 
 def raw2int(raw,offset_start,offset_end):
 	val_ = []
@@ -192,7 +188,8 @@ def main(args):
 	running_event.set()
 
 	collector = HealthyPiCollector(data,args.port,lock,running_event,verbose=True)
-	collector.verbose=False
+	collector.verbose=args.verbose
+
 	if args.csv:
 		collector.signals_csv_writer = signalsWriter
 		collector.numerics_csv_writer = numericsWriter
@@ -200,7 +197,7 @@ def main(args):
 	collector.start()
 
 	if args.graph:
-		plot_window = 480
+		plot_window = args.window
 		y_ecg = np.array(np.zeros([plot_window]))
 		y_ppg = np.array(np.zeros([plot_window]))
 		y_resp = np.array(np.zeros([plot_window]))
@@ -287,11 +284,17 @@ def get_parser():
 		dest='graph',
 		help='Plot the data collection graph',
 		action='store_true')
+	parser.add_argument(
+		'-w','--window',
+		dest='window',
+		help="Plotting window width (default=60)",
+		default=60,
+		metavar='INT')
 
 	args = parser.parse_args()
 	# args = parser.parse_args([
 	# 	'-v',
-	# 	'-p',COM_PORT,
+	# 	'-p','COM3',
 	# 	'-c',
 	# 	'-g',
 	# 	])
